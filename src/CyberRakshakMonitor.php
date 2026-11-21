@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Cyber Rakshak error monitoring for PHP, version 1.0.0
+ * Cyber Rakshak error monitoring for PHP, version 1.1.0
  * Docs: https://app.cyberrakshak.ai/sdk/README.md
  * Copyright Laabam One Business Solutions (OPC) Private Limited
  * Released under the MIT licence: https://app.cyberrakshak.ai/sdk/LICENSE
@@ -39,7 +39,7 @@ namespace CyberRakshak;
 
 final class Monitor
 {
-    public const VERSION = '1.0.0';
+    public const VERSION = '1.1.0';
 
     public const DEFAULT_ENDPOINT = 'https://app.cyberrakshak.ai/api/v1/app-reports';
 
@@ -131,7 +131,9 @@ final class Monitor
      * sampleRate (0..1, default 1), beforeSend (callable: problem array in, array or null out), debug, context (sent with
      * every problem), platform ('server' unless you say 'script', 'desktop' or 'other'), handleExceptions (default
      * true), captureErrors (warnings and user errors, default false), spool (default true: keep what could not be sent
-     * in the temp folder; or a folder of your own; false for none).
+     * in the temp folder; or a folder of your own; false for none), scrubNames (names of your own whose values are
+     * removed, like password=) and scrubPatterns (PCRE patterns, with delimiters, whose matches are removed): both only
+     * add to the built-in rules, which always run.
      *
      * @param  array<string, mixed>  $options
      */
@@ -145,7 +147,7 @@ final class Monitor
             }
             $key = is_string($options['key'] ?? null) ? trim($options['key']) : '';
             if (preg_match('/^crk_[A-Za-z0-9]{32}$/', $key) !== 1) {
-                self::say($debug, "not started: key must be the crk_ key from your site's Errors page");
+                self::say($debug, "not started: key must be your site's crk_ app key (its Security scan tab, Apps, servers and scripts)");
 
                 return;
             }
@@ -162,6 +164,8 @@ final class Monitor
                 $environment = null;
             }
             $rate = isset($options['sampleRate']) && is_numeric($options['sampleRate']) ? (float) $options['sampleRate'] : 1.0;
+            $names = self::extraNames($options['scrubNames'] ?? null, $debug);
+            $alternation = implode('|', array_map(static fn (string $n): string => preg_quote($n, '/'), $names));
             $spool = $options['spool'] ?? true;
             $spoolDir = is_string($spool) && $spool !== '' ? $spool : ($spool === false ? null : sys_get_temp_dir());
             self::$config = [
@@ -173,6 +177,9 @@ final class Monitor
                 'beforeSend' => is_callable($options['beforeSend'] ?? null) ? $options['beforeSend'] : null,
                 'debug' => $debug,
                 'context' => is_array($options['context'] ?? null) ? $options['context'] : [],
+                'extraNames' => $names !== [] ? '/(?<![A-Za-z0-9])((?:'.$alternation.')\\\\?["\']?[ ]*[=:][ ]*\\\\?["\']?)[^ \t\r\n&,;"\'<>\\\\]+/i' : null,
+                'extraKeys' => $names !== [] ? '/(?:^|[^A-Za-z0-9])(?:'.$alternation.')$/i' : null,
+                'extraPatterns' => self::extraPatterns($options['scrubPatterns'] ?? null, $debug),
                 'platform' => in_array($options['platform'] ?? null, self::PLATFORMS, true) ? $options['platform'] : 'server',
                 'runtime' => 'php '.PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION,
                 'transport' => ($options['transport'] ?? null) === 'stream' || ! function_exists('curl_init') ? 'stream' : 'curl',
@@ -293,7 +300,10 @@ final class Monitor
         }
     }
 
-    /** What a text looks like once scrubbed: what this library would send. */
+    /**
+     * What a text looks like once scrubbed: what this library would send. The built-in rules always run, first; then the
+     * names and patterns given to init() as scrubNames and scrubPatterns, which can only add to them.
+     */
     public static function scrub(mixed $text): string
     {
         try {
@@ -305,11 +315,145 @@ final class Monitor
                 }
                 $out = $next;
             }
+            $config = self::$config;
+            if ($config !== null && $config['extraNames'] !== null) {
+                $next = preg_replace_callback($config['extraNames'], static fn (array $m): string => $m[1].'[removed]', $out);
+                if ($next === null) {
+                    return '[removed]';
+                }
+                $out = $next;
+            }
+            foreach ($config['extraPatterns'] ?? [] as $pattern) {
+                // A pattern of yours that fails is skipped; the built-in rules have run.
+                $next = @preg_replace($pattern, '[removed]', $out);
+                if (is_string($next)) {
+                    $out = $next;
+                }
+            }
 
             return $out;
         } catch (\Throwable) {
             return '';
         }
+    }
+
+    /** ISO 13616: the first four characters moved to the end, letters as 10..35, the whole number mod 97 is 1. */
+    private static function ibanOk(string $text): bool
+    {
+        $s = str_replace(' ', '', $text);
+        $length = strlen($s);
+        if ($length < 15 || $length > 34) {
+            return false;
+        }
+        $moved = substr($s, 4).substr($s, 0, 4);
+        $rest = 0;
+        for ($i = 0; $i < $length; $i++) {
+            $c = ord($moved[$i]);
+            $v = $c >= 65 ? $c - 55 : $c - 48;
+            $rest = $v > 9 ? ($rest * 100 + $v) % 97 : ($rest * 10 + $v) % 97;
+        }
+
+        return $rest === 1;
+    }
+
+    /**
+     * A context entry's name that says its value is a secret: the words of the password rule anywhere in it, or one of
+     * the whole-word names (at the end, not right after a letter or digit: user_pin, x-tink-signature, not spinning).
+     */
+    private static function secretName(string $name): bool
+    {
+        if (preg_match('/password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|session[_-]?id/i', $name) === 1
+            || preg_match('/(?:^|[^A-Za-z0-9])(?:authorization|cookie|signature|otp|pin|cvv|cvc|iban|bban|pan|account[_-]?(?:no|number|num)|sort[_-]?code|card[_-]?number|bank[_-]?auth[_-]?id)$/i', $name) === 1) {
+            return true;
+        }
+        $keys = self::$config['extraKeys'] ?? null;
+
+        return $keys !== null && preg_match($keys, $name) === 1;
+    }
+
+    /**
+     * scrubNames: names of your own, as whole words, their values removed like the built-in ones; at most 50.
+     *
+     * @return list<string>
+     */
+    private static function extraNames(mixed $list, bool $debug): array
+    {
+        $names = [];
+        if ($list === null) {
+            return $names;
+        }
+        if (! is_array($list)) {
+            self::say($debug, 'scrubNames left out: it must be a list of names');
+
+            return $names;
+        }
+        foreach ($list as $name) {
+            if (! is_string($name) || preg_match('/^[A-Za-z0-9_.-]{1,40}$/', $name) !== 1) {
+                self::say($debug, 'scrubNames: a name was left out: only A-Z a-z 0-9 _ . - (1 to 40)');
+
+                continue;
+            }
+            if (count($names) >= 50) {
+                self::say($debug, 'scrubNames: only the first 50 are used');
+
+                break;
+            }
+            if (! in_array(strtolower($name), $names, true)) {
+                $names[] = strtolower($name);
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * scrubPatterns: PCRE patterns of your own, with their delimiters ('/faces\/\S+/'); what they match goes. At most 20;
+     * one that does not compile, or matches an empty text, is left out.
+     *
+     * @return list<string>
+     */
+    private static function extraPatterns(mixed $list, bool $debug): array
+    {
+        $patterns = [];
+        if ($list === null) {
+            return $patterns;
+        }
+        if (! is_array($list)) {
+            self::say($debug, 'scrubPatterns left out: it must be a list of patterns');
+
+            return $patterns;
+        }
+        foreach ($list as $pattern) {
+            if (count($patterns) >= 20) {
+                self::say($debug, 'scrubPatterns: only the first 20 are used');
+
+                break;
+            }
+            if (! is_string($pattern)) {
+                self::say($debug, 'scrubPatterns: a pattern was left out: it must be a string');
+
+                continue;
+            }
+            set_error_handler(static fn (): bool => true);
+            try {
+                $matched = preg_match($pattern, '');
+            } finally {
+                restore_error_handler();
+            }
+            if ($matched === false) {
+                self::say($debug, 'scrubPatterns: a pattern was left out: it does not compile');
+
+                continue;
+            }
+            if ($matched === 1) {
+                self::say($debug, 'scrubPatterns: a pattern that matches an empty text was left out');
+
+                continue;
+            }
+            $patterns[] = $pattern;
+        }
+
+        return $patterns;
     }
 
     // ── Scrubbing: the same rules, in the same order, in every Cyber Rakshak library ──────────────────────────────────
@@ -337,8 +481,16 @@ final class Monitor
             ['/(?<![A-Za-z0-9])(?:crk_|crw_|sk_live_|sk_test_|pk_live_|pk_test_|rk_live_|ghp_|gho_|ghs_|ghu_|github_pat_|glpat-|xoxb-|xoxp-|xoxa-|AKIA|ASIA|AIza)[A-Za-z0-9_-]{10,}/', static fn (array $m): string => '[token]'],
             // Email addresses (at most 64 characters before the @, as in an address).
             ['/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/', static fn (array $m): string => '[email]'],
+            // IBANs: two capital letters, two digits, then 11 to 30 capitals or digits (or the same in groups of four, single
+            // spaces between), 15 to 34 in all, passing the ISO 13616 mod-97 check. Before cards: an IBAN holds a digit run.
+            ['/(?<![A-Za-z0-9])[A-Z]{2}[0-9]{2}(?:[A-Z0-9]{11,30}|(?: [A-Z0-9]{4}){2,7}(?: [A-Z0-9]{1,4})?)(?![A-Za-z0-9])/', static fn (array $m): string => self::ibanOk($m[0]) ? '[iban]' : $m[0]],
             // Card numbers: 13 to 19 digits (single spaces or dashes between) that pass the Luhn check.
             ['/(?<![0-9])[0-9](?:[ -]?[0-9]){12,18}/', static fn (array $m): string => self::luhn(str_replace([' ', '-'], '', $m[0])) ? '[card]' : $m[0]],
+            // pin: 1234, "iban": "...", set-cookie: ..., x-tink-signature=...: these names only as whole words (not right after a
+            // letter or digit, the separator right after the name), so company:, spinning: and japan: stay; the value goes as in
+            // the password rule. After IBANs and cards, so a value with spaces in it has gone whole already. A value that is
+            // Bearer or Basic and a space was handled above.
+            ['/(?<![A-Za-z0-9])((?:authorization|cookie|signature|otp|pin|cvv|cvc|iban|bban|pan|account[_-]?(?:no|number|num)|sort[_-]?code|card[_-]?number|bank[_-]?auth[_-]?id)\\\\?["\']?[ ]*[=:][ ]*\\\\?["\']?)(?!(?:bearer|basic) )[^ \t\r\n&,;"\'<>\\\\]+/i', static fn (array $m): string => $m[1].'[removed]'],
             // Long hex runs: session ids, hashes, keys.
             ['/[0-9a-fA-F]{32,}/', static fn (array $m): string => '[token]'],
             // Long random-looking runs: a digit, an upper-case and a lower-case letter in 40 or more of A-Z a-z 0-9 + _ -.
@@ -460,7 +612,9 @@ final class Monitor
         foreach ($sources as $source) {
             foreach ($source as $name => $value) {
                 $key = self::clip((string) $name, self::MAX_CONTEXT_KEY);
-                if (is_string($value)) {
+                if (self::secretName((string) $name)) {
+                    $value = '[removed]';
+                } elseif (is_string($value)) {
                     $value = self::clean($value, self::MAX_CONTEXT_VALUE);
                 } elseif (is_float($value) && ! is_finite($value)) {
                     continue;

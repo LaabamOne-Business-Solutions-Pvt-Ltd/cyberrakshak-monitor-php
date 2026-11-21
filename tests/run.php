@@ -134,7 +134,7 @@ foreach (['curl', 'stream'] as $transport) {
         clean($r);
         same('Bearer '.KEY, $r[0]['authorization']);
         $b = $r[0]['body'];
-        same(['name' => 'cyberrakshak-php', 'version' => '1.0.0'], $b['sdk']);
+        same(['name' => 'cyberrakshak-php', 'version' => '1.1.0'], $b['sdk']);
         same('server', $b['platform']);
         check(preg_match('/^php \d+\.\d+$/', $b['runtime']) === 1, 'runtime '.$b['runtime']);
         same('2026.11.21+3', $b['release']);
@@ -421,6 +421,35 @@ test('the command is the route of a script; the key is never printed', function 
     $r = requests();
     same('script', $r[0]['body']['platform']);
     check(preg_match('/^cr\w*(\.tmp)?\.php$/', $r[0]['body']['errors'][0]['route']) === 1, 'route '.$r[0]['body']['errors'][0]['route']);
+});
+
+test('scrubNames and scrubPatterns add to the built-in rules; a secret context name goes as [removed]', function () {
+    start(['scrubNames' => ['x-brand-key', 'face.key', 'bad name', 7], 'scrubPatterns' => ['/faces\/[A-Za-z0-9\/_.-]+/', '/upload-[0-9]+/', '/(/', '/x*/', 7], 'context' => ['client_secret' => 'abc', 'region' => 'dub1']]);
+    Monitor::captureException(new RuntimeException('x-brand-key=B1 for faces/2026/a.jpg (upload-77)'), ['route' => '/files/face.key=K9', 'context' => ['user_pin' => 1234, 'iban' => 'IE29AIBK93115212345678', 'x-tink-signature' => true, 'spinning' => 'yes', 'japan' => 3]]);
+    same(true, Monitor::flush(3));
+    $r = requests(1);
+    clean($r);
+    $p = problems($r)[0];
+    same('RuntimeException: x-brand-key=[removed] for [removed] ([removed])', $p['message']);
+    same('/files/face.key=[removed]', $p['route']);
+    same(['client_secret' => '[removed]', 'region' => 'dub1', 'user_pin' => '[removed]', 'iban' => '[removed]', 'x-tink-signature' => '[removed]', 'spinning' => 'yes', 'japan' => 3], $p['context']);
+    same('pin=[removed] x-brand-key=[removed] password=[removed]', Monitor::scrub('pin=1 x-brand-key=2 password=3'));
+    Monitor::close();
+    same('x-brand-key=2', Monitor::scrub('x-brand-key=2'));
+});
+
+test('scrubNames and scrubPatterns: at most 50 names and 20 patterns; the built-in rules cannot be removed', function () {
+    $names = ['ok_name'];
+    for ($i = 0; $i < 60; $i++) {
+        $names[] = 'n'.$i;
+    }
+    $patterns = ['/fine/'];
+    for ($i = 0; $i < 25; $i++) {
+        $patterns[] = '/p'.$i.'q/';
+    }
+    start(['scrubNames' => $names, 'scrubPatterns' => $patterns]);
+    same('ok_name=[removed] n48=[removed] n49=3 [removed] [removed] p19q', Monitor::scrub('ok_name=1 n48=2 n49=3 fine p18q p19q'));
+    same('password=[removed] card [card]', Monitor::scrub('password=1 card 4111 1111 1111 1111'));
 });
 
 // ── Runner ────────────────────────────────────────────────────────────────────────────────────────────────────────────
