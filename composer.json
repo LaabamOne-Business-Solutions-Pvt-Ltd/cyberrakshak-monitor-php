@@ -1,0 +1,35 @@
+{
+    "name": "cyberrakshak/monitor",
+    "description": "Cyber Rakshak error monitoring for PHP: uncaught exceptions, fatal errors and (if you like) warnings, scrubbed of secrets, sent to your site's Errors page. One class, no dependencies.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["error monitoring", "error tracking", "crash reporting", "exceptions", "fatal errors", "laravel", "cyberrakshak"],
+    "homepage": "https://app.cyberrakshak.ai/sdk/README.md",
+    "authors": [
+        {
+            "name": "Laabam One Business Solutions (OPC) Private Limited",
+            "homepage": "https://www.cyberrakshak.ai"
+        }
+    ],
+    "support": {
+        "docs": "https://app.cyberrakshak.ai/sdk/README.md",
+        "issues": "https://github.com/LaabamOne-Business-Solutions-Pvt-Ltd/cyberrakshak-monitor-php/issues",
+        "source": "https://github.com/LaabamOne-Business-Solutions-Pvt-Ltd/cyberrakshak-monitor-php"
+    },
+    "require": {
+        "php": ">=8.1"
+    },
+    "suggest": {
+        "ext-curl": "Sends reports with curl; without it, PHP's own HTTP streams are used.",
+        "ext-mbstring": "Cuts long texts with mbstring; without it, the library does the same itself."
+    },
+    "autoload": {
+        "classmap": ["src/CyberRakshakMonitor.php"]
+    },
+    "scripts": {
+        "test": "@php tests/run.php"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

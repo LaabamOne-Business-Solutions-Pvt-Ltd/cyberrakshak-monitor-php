@@ -1,0 +1,4 @@
+/vendor/
+# A library: no lock file (the apps that require it have theirs)
+/composer.lock
+.DS_Store
