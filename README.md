@@ -8,7 +8,8 @@ dependencies; curl when it is there, PHP's own streams when not.
 
 - **Uncaught exceptions**: the handler that was there before still runs; without one, PHP's own "Uncaught …" message
   and exit.
-- **Fatal errors**, out of memory too (at shutdown).
+- **Fatal errors**, out of memory too (at shutdown). Running out of memory is reported wherever PHP still runs shutdown
+  functions after it; Ubuntu's PHP 8.1.34 packages (deb.sury.org) run none, so nothing can report it there.
 - With `captureErrors`, **warnings and user errors** (PHP's handling of them is unchanged).
 - Anything you report yourself: `captureException($e)` and `captureMessage($text)`.
 

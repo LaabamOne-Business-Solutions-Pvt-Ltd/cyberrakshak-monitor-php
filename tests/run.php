@@ -360,10 +360,25 @@ test('the exception handler set before init() still runs', function () {
     same([['crash', 'RuntimeException: handled-boom']], array_map(fn ($p) => [$p['kind'], $p['message']], problems(requests(1, 3000))));
 });
 
-test('a fatal error (out of memory) is reported at shutdown', function () {
-    [$code, $out, $err] = runPhp("ini_set('memory_limit', '16M');\n\\CyberRakshak\\Monitor::init(['key' => KEY, 'endpoint' => ENDPOINT, 'spool' => false]);\n\$a = [];\nwhile (true) { \$a[] = str_repeat('x', 100000); }\n");
-    same(255, $code, 'exit code (output: '.trim($out.$err).')');
+test('a fatal error (out of memory) is reported at shutdown, and the exit code is PHP\'s own', function () {
+    $limit = "ini_set('memory_limit', '16M');\n";
+    $loop = "\$a = [];\nwhile (true) { \$a[] = str_repeat('x', 100000); }\n";
+    // ⚠️ What PHP itself does here differs by build, so the same script without the library says it: its exit code
+    // (255; 1 on Ubuntu's PHP 8.1.34), and whether any shutdown function runs after running out of memory (Ubuntu's PHP
+    // 8.1.34 runs none, so nothing at all can report it there; the official 8.1.31 does). The library changes neither.
+    [$plain, $plainOut, $plainErr] = runPhp($limit."register_shutdown_function(function () { echo 'shutdown ran'; });\n".$loop);
+    check($plain !== 0 && str_contains($plainOut.$plainErr, 'Allowed memory size'), 'without the library: exit code '.$plain);
+    $shutdownRuns = str_contains($plainOut, 'shutdown ran');
+    control('reset', []);
+    [$code, $out, $err] = runPhp($limit."\\CyberRakshak\\Monitor::init(['key' => KEY, 'endpoint' => ENDPOINT, 'spool' => false]);\n".$loop);
+    same($plain, $code, 'exit code, PHP\'s own without the library (output: '.trim($out.$err).')');
     check(str_contains($out.$err, 'Allowed memory size'), 'PHP printed it');
+    if (! $shutdownRuns) {
+        same([], requests(), 'nothing can have been sent: this PHP ran no shutdown function');
+        echo '        (PHP '.PHP_VERSION." runs no shutdown function after running out of memory: nothing can report it)\n";
+
+        return;
+    }
     $p = problems(requests(1, 3000));
     same(1, count($p));
     same('crash', $p[0]['kind']);
