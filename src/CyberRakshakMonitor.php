@@ -804,7 +804,13 @@ final class Monitor
                 self::$queue = array_slice(self::$queue, count($taken), null, true);
                 [$body, $sent, $rest] = self::fit($taken);
                 self::$queue = $rest + self::$queue;
-                [$status, $retryAfter] = self::post($body, min(self::SEND_TIMEOUT, max(0.1, $deadline - microtime(true))));
+                try {
+                    [$status, $retryAfter] = self::post($body, min(self::SEND_TIMEOUT, max(0.1, $deadline - microtime(true))));
+                } catch (\Throwable $e) {
+                    // A failure inside the sending is no answer: these problems are kept and tried again, never lost.
+                    self::debug('could not send: '.$e->getMessage());
+                    [$status, $retryAfter] = [0, null];
+                }
                 if ($status >= 200 && $status < 300) {
                     self::$backoff = 0.0;
 
@@ -982,21 +988,28 @@ final class Monitor
                 'ignore_errors' => true,
                 'follow_location' => 0,
             ]]);
-            $answer = @file_get_contents($config['endpoint'], false, $context);
-            // PHP 8.4+ has a function for the answer's headers; before it, PHP put them in a local variable (named
-            // through get_defined_vars(): PHP 8.5 deprecates writing its name).
-            $lines = function_exists('http_get_last_response_headers') ? (http_get_last_response_headers() ?? []) : (get_defined_vars()['http_response_header'] ?? []);
+            // ⚠️ The answer's headers come from the stream itself (wrapper_data), the same in every PHP version. Not
+            // $http_response_header through get_defined_vars(): PHP 8.1-8.3 fill it only in a function that names it,
+            // so every answer read as none (and was sent again); PHP 8.5 deprecates naming it. Not
+            // http_get_last_response_headers() either: PHP 8.4 and later only.
             $status = 0;
-            if ($answer !== false || $lines !== []) {
-                foreach ($lines as $line) {
+            $stream = @fopen($config['endpoint'], 'r', false, $context);
+            if ($stream === false) {
+                self::debug('could not reach '.$config['endpoint']);
+            } else {
+                $meta = stream_get_meta_data($stream);
+                @stream_get_contents($stream, 65536);
+                fclose($stream);
+                foreach (is_array($meta['wrapper_data'] ?? null) ? $meta['wrapper_data'] : [] as $line) {
+                    if (! is_string($line)) {
+                        continue;
+                    }
                     if (preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $m) === 1) {
                         $status = (int) $m[1];
                     } elseif (stripos($line, 'retry-after:') === 0) {
                         $retryAfter = trim(substr($line, 12));
                     }
                 }
-            } else {
-                self::debug('could not reach '.$config['endpoint']);
             }
         }
 
@@ -1008,7 +1021,9 @@ final class Monitor
         if ($value === null || $value === '') {
             return null;
         }
-        if (ctype_digit($value)) {
+        // Not ctype_digit(): the ctype extension is not in every PHP (without it, a 429 threw here and its problems
+        // were lost).
+        if (preg_match('/^\d+$/', $value) === 1) {
             return min(self::RETRY_AFTER_MAX, (float) $value);
         }
         $when = strtotime($value);

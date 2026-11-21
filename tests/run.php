@@ -62,13 +62,16 @@ function start(array $extra = []): void
     Monitor::init($extra + ['key' => KEY, 'endpoint' => endpoint(), 'handleExceptions' => false, 'spool' => false]);
 }
 
-/** Runs PHP code in a new process (the library loaded, KEY and ENDPOINT defined): [exit code, stdout, stderr, seconds]. */
-function runPhp(string $code): array
+/**
+ * Runs PHP code in a new process (the library loaded, KEY and ENDPOINT defined), with $phpArgs before the file:
+ * [exit code, stdout, stderr, seconds].
+ */
+function runPhp(string $code, array $phpArgs = []): array
 {
     $file = tempnam(sys_get_temp_dir(), 'crphp').'.php';
     file_put_contents($file, "<?php\nrequire ".var_export($GLOBALS['sdk'], true).";\nconst KEY = '".KEY."';\nconst ENDPOINT = ".var_export(endpoint(), true).";\n".$code);
     $t = microtime(true);
-    $p = proc_open([PHP_BINARY, '-d', 'display_errors=stderr', '-d', 'log_errors=0', '-d', 'error_reporting=-1', $file], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    $p = proc_open([PHP_BINARY, '-d', 'display_errors=stderr', '-d', 'log_errors=0', '-d', 'error_reporting=-1', ...$phpArgs, $file], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
     fclose($pipes[0]);
     $out = stream_get_contents($pipes[1]);
     $err = stream_get_contents($pipes[2]);
@@ -226,6 +229,19 @@ test('429 at the end of a request: kept in the spool, sent by a later request', 
     same([], glob($dir.'/cyberrakshak-monitor-*.json'), 'the spool is gone once sent');
 });
 
+// ⚠️ ctype is an extension some PHP builds leave out (Alpine's php-ctype, Ubuntu's PHP run with php -n): the
+// library once read Retry-After with ctype_digit(), so a 429 threw inside it and its problems were lost.
+test('without the ctype extension, a 429 with Retry-After still keeps its problems (in the spool)', function () {
+    $dir = spoolDir();
+    control('plan', ['responses' => [['status' => 429, 'retryAfter' => '1']]]);
+    [$code, $out, $err] = runPhp("\\CyberRakshak\\Monitor::init(['key' => KEY, 'endpoint' => ENDPOINT, 'spool' => ".var_export($dir, true)."]);\n\\CyberRakshak\\Monitor::captureMessage('kept without ctype');\necho function_exists('ctype_digit') ? 'ctype' : 'no ctype';\n", ['-d', 'disable_functions=ctype_digit']);
+    same(0, $code, 'exit code (output: '.trim($out.$err).')');
+    same('no ctype', trim($out));
+    same(1, count(requests()));
+    $files = glob($dir.'/cyberrakshak-monitor-*.json');
+    check(count($files) === 1 && str_contains((string) file_get_contents($files[0]), 'kept without ctype'), 'the 429 kept it in the spool');
+});
+
 test('422: dropped, never retried', function () {
     control('plan', ['responses' => [['status' => 422]]]);
     start();
@@ -346,7 +362,7 @@ test('the exception handler set before init() still runs', function () {
 
 test('a fatal error (out of memory) is reported at shutdown', function () {
     [$code, $out, $err] = runPhp("ini_set('memory_limit', '16M');\n\\CyberRakshak\\Monitor::init(['key' => KEY, 'endpoint' => ENDPOINT, 'spool' => false]);\n\$a = [];\nwhile (true) { \$a[] = str_repeat('x', 100000); }\n");
-    same(255, $code);
+    same(255, $code, 'exit code (output: '.trim($out.$err).')');
     check(str_contains($out.$err, 'Allowed memory size'), 'PHP printed it');
     $p = problems(requests(1, 3000));
     same(1, count($p));
