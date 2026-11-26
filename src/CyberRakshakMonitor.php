@@ -1,13 +1,13 @@
 <?php
 
 /**
- * Cyber Rakshak error monitoring for PHP, version 1.1.0
+ * Cyber Rakshak error monitoring for PHP, version 1.1.1
  * Docs: https://app.cyberrakshak.ai/sdk/README.md
  * Copyright Laabam One Business Solutions (OPC) Private Limited
  * Released under the MIT licence: https://app.cyberrakshak.ai/sdk/LICENSE
  *
  * One file, no dependencies, PHP 8.1 or later (curl when it is there, PHP's own streams when not). Sends what goes
- * wrong in your site or script to your site's Errors page in the Cyber Rakshak console: the exception's text, where it
+ * wrong in your site or script to its own Errors page in the Cyber Rakshak console: the exception's text, where it
  * was thrown and its trace (file, line and function, never the arguments), the route or command, when and how often.
  * Secrets are scrubbed here before anything leaves (email addresses, tokens and keys, password=... values, query
  * strings, card numbers); request bodies, headers, cookies, sessions and environment variables are never read.
@@ -39,7 +39,7 @@ namespace CyberRakshak;
 
 final class Monitor
 {
-    public const VERSION = '1.1.0';
+    public const VERSION = '1.1.1';
 
     public const DEFAULT_ENDPOINT = 'https://app.cyberrakshak.ai/api/v1/app-reports';
 
@@ -147,7 +147,7 @@ final class Monitor
             }
             $key = is_string($options['key'] ?? null) ? trim($options['key']) : '';
             if (preg_match('/^crk_[A-Za-z0-9]{32}$/', $key) !== 1) {
-                self::say($debug, "not started: key must be your site's crk_ app key (its Security scan tab, Apps, servers and scripts)");
+                self::say($debug, "not started: key must be its crk_ app key (the console's Apps & websites: Add, then its Set up page)");
 
                 return;
             }

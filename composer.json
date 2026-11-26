@@ -1,6 +1,6 @@
 {
     "name": "cyberrakshak/monitor",
-    "description": "Cyber Rakshak error monitoring for PHP: uncaught exceptions, fatal errors and (if you like) warnings, scrubbed of secrets, sent to your site's Errors page. One class, no dependencies.",
+    "description": "Cyber Rakshak error monitoring for PHP: uncaught exceptions, fatal errors and (if you like) warnings, scrubbed of secrets, sent to its own Errors page in Cyber Rakshak. One class, no dependencies.",
     "type": "library",
     "license": "MIT",
     "keywords": ["error monitoring", "error tracking", "crash reporting", "exceptions", "fatal errors", "laravel", "cyberrakshak"],
