@@ -134,7 +134,7 @@ foreach (['curl', 'stream'] as $transport) {
         clean($r);
         same('Bearer '.KEY, $r[0]['authorization']);
         $b = $r[0]['body'];
-        same(['name' => 'cyberrakshak-php', 'version' => '1.1.0'], $b['sdk']);
+        same(['name' => 'cyberrakshak-php', 'version' => '1.1.1'], $b['sdk']);
         same('server', $b['platform']);
         check(preg_match('/^php \d+\.\d+$/', $b['runtime']) === 1, 'runtime '.$b['runtime']);
         same('2026.11.21+3', $b['release']);
